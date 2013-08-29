@@ -6,16 +6,14 @@ import com.sun.codemodel.*;
 import com.thoughtworks.qdox.model.Annotation;
 import com.thoughtworks.qdox.model.JavaClass;
 import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
 
 import java.util.*;
 
 /**
  * Created by cyril on 8/28/13.
  */
-@Mojo( name = "gen-dao", defaultPhase = LifecyclePhase.GENERATE_SOURCES )
+@Mojo( name = "gen-dao" )
 public class GenDaoMojo extends AbstractGeneratorMojo {
 
     public static final String JPA_REPOSITORY_CLASS_NAME
@@ -33,27 +31,26 @@ public class GenDaoMojo extends AbstractGeneratorMojo {
             = "org.springframework.transaction.annotation.Transactional";
 
     private static final String NATIVE_QUERIES_ANNOTATION_CLASS_NAME
-            = "com.redshape.generators.annotations.NativeQueries";
+            = "NativeQueries";
     private static final String NATIVE_QUERY_ANNOTATION_CLASS_NAME
-            = "com.redshape.generators.annotations.NativeQuery";
+            = "NativeQuery";
     private static final String CONVENTIONAL_QUERIES_ANNOTATION_CLASS_NAME
-            = "com.redshape.generators.annotations.ConventionalQueries";
+            = "ConventionalQueries";
     private static final String CONVENTIONAL_QUERY_ANNOTATION_CLASS_NAME
-            = "com.redshape.generators.annotations.ConventionalQuery";
+            = "ConventionalQuery";
+
     private static final String PAGE_CLASS_NAME
             = "org.springframework.data.domain.Page";
     private static final String PAGEABLE_CLASS_NAME
-            = "org.springframework.data.domain.Page";
+            = "org.springframework.data.domain.Pageable";
     private static final String SORT_CLASS_NAME
             = "org.springframework.data.domain.Sort";
 
     private final Map<String, String> cache = new HashMap<String, String>();
 
-    @Parameter( property = "daoSuffix", defaultValue = "dao")
-    private String daoSuffix = "dao";
-
     public GenDaoMojo() {
-        super("Spring Data repositories generator");
+        super("Spring Data repositories generator", DAO_GENERATOR_PREFIX, DAO_GENERATOR_SUFFIX,
+                DAO_GENERATOR_POSTFIX);
     }
 
     @Override
@@ -94,7 +91,7 @@ public class GenDaoMojo extends AbstractGeneratorMojo {
             rootRepository = false;
         }
 
-        JDefinedClass daoClass = defineInterface( entityClazz.getFullyQualifiedName(), daoSuffix );
+        JDefinedClass daoClass = defineInterface( entityClazz.getFullyQualifiedName(), daoPackage );
         cache.put( entityClazz.getFullyQualifiedName(), daoClass.fullName() );
 
         JClass repositoryClass;
@@ -123,7 +120,7 @@ public class GenDaoMojo extends AbstractGeneratorMojo {
     protected void generateQueryMethods(JavaClass entityClazz, JDefinedClass daoClazz) {
         List<QuerySpec> querySpecList = new ArrayList<QuerySpec>();
         for ( Annotation annotation : entityClazz.getAnnotations() ) {
-            if ( !isSupportedAnnotation(annotation.getType().getFullyQualifiedName()) ) {
+            if ( !isSupportedAnnotation(annotation.getType().getJavaClass()) ) {
                 continue;
             }
 
@@ -210,7 +207,7 @@ public class GenDaoMojo extends AbstractGeneratorMojo {
 
     protected List<QuerySpec> processAnnotation( Annotation annotation ) {
         List<QuerySpec> querySpec = new ArrayList<QuerySpec>();
-        if ( isAnnotationsList(annotation.getType().getFullyQualifiedName()) ) {
+        if ( isAnnotationsList(annotation.getType().getJavaClass()) ) {
             Object value = annotation.getNamedParameter("value");
             if ( value instanceof List ) {
                 for ( Annotation childAnnotation : (List<Annotation>) value) {
@@ -278,19 +275,19 @@ public class GenDaoMojo extends AbstractGeneratorMojo {
     }
 
     protected boolean isNativeQuery( Annotation annotation ) {
-        return annotation.getType().getJavaClass().isA(NATIVE_QUERY_ANNOTATION_CLASS_NAME);
+        return isA(annotation.getType().getJavaClass(), NATIVE_QUERY_ANNOTATION_CLASS_NAME);
     }
 
-    protected boolean isAnnotationsList( String annotationClassName  ) {
-        return annotationClassName.equals( NATIVE_QUERIES_ANNOTATION_CLASS_NAME )
-                || annotationClassName.equals( CONVENTIONAL_QUERIES_ANNOTATION_CLASS_NAME );
+    protected boolean isAnnotationsList( JavaClass annotationClassName  ) {
+        return isA( annotationClassName, NATIVE_QUERIES_ANNOTATION_CLASS_NAME )
+                || isA( annotationClassName, CONVENTIONAL_QUERIES_ANNOTATION_CLASS_NAME );
     }
 
-    protected boolean isSupportedAnnotation( String annotationClassName ) {
-        return annotationClassName.equals(NATIVE_QUERIES_ANNOTATION_CLASS_NAME)
-                || annotationClassName.equals(NATIVE_QUERY_ANNOTATION_CLASS_NAME)
-                || annotationClassName.equals(CONVENTIONAL_QUERIES_ANNOTATION_CLASS_NAME)
-                || annotationClassName.equals(CONVENTIONAL_QUERY_ANNOTATION_CLASS_NAME);
+    protected boolean isSupportedAnnotation( JavaClass annotationClassName ) {
+        return isA(annotationClassName, NATIVE_QUERIES_ANNOTATION_CLASS_NAME)
+                || isA(annotationClassName, NATIVE_QUERY_ANNOTATION_CLASS_NAME)
+                || isA(annotationClassName, CONVENTIONAL_QUERIES_ANNOTATION_CLASS_NAME)
+                || isA(annotationClassName, CONVENTIONAL_QUERY_ANNOTATION_CLASS_NAME);
     }
 
     protected String selectNonConflictingName( List<QuerySpecParam> parameters, String name ) {
@@ -311,13 +308,6 @@ public class GenDaoMojo extends AbstractGeneratorMojo {
         } while ( conflicting );
 
         return name;
-    }
-
-    @Override
-    protected String prepareClassName(String name, String suffix) {
-        String className = super.prepareClassName(name, suffix);
-        className = className + "DAO";
-        return className;
     }
 
     public class QuerySpec {

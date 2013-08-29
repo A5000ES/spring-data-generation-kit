@@ -80,6 +80,34 @@ public class GenDaoMojoTest extends AbstractMojoTestCase {
         sourceRootNode.setValue("src/test/java");
         configuration.addChild( sourceRootNode );
 
+        Xpp3Dom basePackageNode = new Xpp3Dom("basePackage");
+        basePackageNode.setValue("com.redshape.generators.jpa.entities");
+        configuration.addChild( basePackageNode );
+
+        Xpp3Dom daoPackageNode = new Xpp3Dom("daoPackage");
+        daoPackageNode.setValue("com.redshape.generators.jpa");
+        configuration.addChild( daoPackageNode );
+
+        Xpp3Dom dtoPackageNode = new Xpp3Dom("dtoPackage");
+        dtoPackageNode.setValue("com.redshape.generators.jpa");
+        configuration.addChild( dtoPackageNode );
+
+        Xpp3Dom attachSuffixes = new Xpp3Dom("attachSuffixes");
+        attachSuffixes.setValue("true");
+        configuration.addChild( attachSuffixes );
+
+        Xpp3Dom attachPrefixes = new Xpp3Dom("attachPrefixes");
+        attachPrefixes.setValue("true");
+        configuration.addChild( attachPrefixes );
+
+        Xpp3Dom attachPostfixes = new Xpp3Dom("attachPostfixes");
+        attachPostfixes.setValue("true");
+        configuration.addChild( attachPostfixes );
+
+        Xpp3Dom attachAffixes = new Xpp3Dom("disableAffixesAttach");
+        attachAffixes.setValue("false");
+        configuration.addChild( attachAffixes );
+
         Xpp3Dom entityPatternNode = new Xpp3Dom("entityPattern");
         entityPatternNode.setValue("**/*.java");
         configuration.addChild(entityPatternNode);

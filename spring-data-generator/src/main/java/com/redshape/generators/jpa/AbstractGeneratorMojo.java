@@ -3,22 +3,29 @@ package com.redshape.generators.jpa;
 import com.redshape.generators.jpa.utils.StringUtils;
 import com.sun.codemodel.*;
 import com.thoughtworks.qdox.JavaDocBuilder;
-import com.thoughtworks.qdox.model.AbstractBaseJavaEntity;
-import com.thoughtworks.qdox.model.Annotation;
-import com.thoughtworks.qdox.model.JavaClass;
-import com.thoughtworks.qdox.model.JavaField;
+import com.thoughtworks.qdox.model.*;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.plugins.annotations.Parameter;
 import org.codehaus.plexus.util.DirectoryScanner;
 
+import javax.persistence.*;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 
 public abstract class AbstractGeneratorMojo extends AbstractMojo {
+
+    public static final String DTO_GENERATOR_PREFIX = "";
+    public static final String DTO_GENERATOR_SUFFIX = "dto";
+    public static final String DTO_GENERATOR_POSTFIX = "DTO";
+
+    public static final String DAO_GENERATOR_PREFIX = "I";
+    public static final String DAO_GENERATOR_SUFFIX = "dao";
+    public static final String DAO_GENERATOR_POSTFIX = "DAO";
 
     public static final String ENTITY_ANNOTATION_CLASS_NAME
             = "javax.persistence.Entity";
@@ -38,20 +45,57 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
     protected JavaDocBuilder classMetaBuilder;
 
     @Parameter( property = "outputPath", required = true, defaultValue = "target/")
-    private String outputPath = "target/";
+    protected String outputPath = "target/";
 
     @Parameter( property = "entityPattern", required = true )
-    private String entityPattern = "";
+    protected String entityPattern = "";
 
     @Parameter( property = "sourceRoot", defaultValue = "src/main/java" )
-    private String sourceRoot = "src/main/java";
+    protected String sourceRoot = "src/main/java";
+
+    @Parameter( property = "basePackage", required = true)
+    protected String basePackage;
+
+    @Parameter( property = "daoPackage", required = true )
+    protected String daoPackage;
+
+    @Parameter( property = "dtoPackage", required = true )
+    protected String dtoPackage;
+    
+    @Parameter( property = "attachSuffixes", defaultValue = "true" )
+    protected Boolean attachSuffixes = true;
+
+    @Parameter( property = "attachPrefixes", defaultValue = "true" )
+    protected Boolean attachPrefixes = true;
+
+    @Parameter( property = "attachPostfixes", defaultValue = "true" )
+    protected Boolean attachPostfixes = true;
+
+    @Parameter( property = "disableAffixesAttach", defaultValue = "false" )
+    protected Boolean disableAffixesAttach = false;
+
+    @Parameter( property = "skipStaticFields", defaultValue = "false" )
+    protected Boolean skipStaticFields = false;
 
     private final AtomicBoolean classMetaBuilderCreated = new AtomicBoolean();
 
     private final String generatorName;
 
-    protected AbstractGeneratorMojo( String generatorName ) {
+    private final String generatorPostfix;
+
+    private final String generatorPrefix;
+
+    private final String generatorSuffix;
+
+    protected AbstractGeneratorMojo( String generatorName,
+                                     String generatorPrefix,
+                                     String generatorSuffix,
+                                     String generatorPostfix) {
         super();
+
+        this.generatorPrefix = generatorPrefix;
+        this.generatorPostfix = generatorPostfix;
+        this.generatorSuffix = generatorSuffix;
 
         this.generatorName = generatorName;
         this.codeModel = new JCodeModel();
@@ -67,6 +111,10 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
         }
 
         return this.classMetaBuilder;
+    }
+
+    protected boolean isA( JavaClass classType, String className ) {
+        return classType.getName().endsWith( className );
     }
 
     protected String[] findClasses( String sourceRoot, String classPattern ) {
@@ -146,10 +194,10 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
     }
 
     protected boolean isJpaRelationType(String annotationTypeName) {
-        return annotationTypeName.equals(MANY_TO_ONE_ANNOTATION_CLASS_NAME)
-                || annotationTypeName.equals(MANY_TO_MANY_ANNOTATION_CLASS_NAME)
-                || annotationTypeName.equals(ONE_TO_MANY_ANNOTATION_CLASS_NAME)
-                || annotationTypeName.equals(ONE_TO_ONE_ANNOTATION_CLASS_NAME);
+        return  annotationTypeName.equals(ManyToOne.class.getSimpleName())
+                || annotationTypeName.equals(ManyToMany.class.getSimpleName())
+                || annotationTypeName.equals(OneToMany.class.getSimpleName())
+                || annotationTypeName.equals(OneToOne.class.getSimpleName());
     }
 
     protected boolean isSimpleType( JavaClass type ) {
@@ -157,24 +205,70 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
             JType.parse(codeModel, type.getFullyQualifiedName());
             return true;
         } catch ( IllegalArgumentException e ) {
-            return type.getFullyQualifiedName().startsWith("java.lang");
+            return type.isEnum()
+                    || type.isA( Date.class.getCanonicalName() )
+                    || type.getFullyQualifiedName().startsWith("java.lang");
         }
     }
 
     protected boolean isDtoType( JavaClass type ) {
         String typeName = type.getFullyQualifiedName();
 
-        boolean result = typeName.endsWith("DTO");
-        if ( result ) {
-            return result;
+        if ( !disableAffixesAttach ) {
+            if ( typeName.endsWith(DTO_GENERATOR_POSTFIX)
+                    || typeName.startsWith(DTO_GENERATOR_PREFIX) ) {
+                return true;
+            }
         }
 
-        int bIndex = typeName.lastIndexOf(".");
-        if ( bIndex > 0 ) {
-            result = typeName.substring(0, bIndex ).endsWith("dto");
+        if ( typeName.startsWith( dtoPackage ) ) {
+            return true;
+        }
+
+        return false;
+    }
+
+    protected boolean isMethodExists( String methodName, String className ) {
+        JavaClass javaClazz = classMetaBuilder.getClassByName(className);
+        if ( javaClazz == null ) {
+            throw new IllegalArgumentException("Class not found: "
+                    + javaClazz.getFullyQualifiedName() );
+        }
+
+        boolean result = false;
+        for ( JavaMethod method : javaClazz.getMethods() ) {
+            if ( !method.getName().equals( methodName ) ) {
+                continue;
+            }
+
+            result = true;
         }
 
         return result;
+    }
+
+    protected boolean isListType( JavaClass classType ) {
+        return classType.isA( List.class.getCanonicalName() );
+    }
+
+    protected boolean isListType( String classType ) {
+        return isListType( classMetaBuilder.getClassByName(classType) );
+    }
+
+    protected boolean isSetType( JavaClass classType ) {
+        return classType.isA( Set.class.getCanonicalName() );
+    }
+
+    protected boolean isSetType( String className ) {
+        return isSetType( classMetaBuilder.getClassByName(className) );
+    }
+
+    protected boolean isCollectionType( String className ) {
+        return isCollectionType( classMetaBuilder.getClassByName(className) );
+    }
+
+    protected boolean isCollectionType( JavaClass classType ) {
+        return classType.isA( Collection.class.getCanonicalName() );
     }
 
     protected boolean isJpaEntity(JavaClass clazz) {
@@ -199,13 +293,43 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
         return result;
     }
 
-    protected JType convertType( JavaClass originalType, String generatorSuffix ) {
-        JType returnType = null;
-        if ( isSimpleType( originalType ) || isDtoType(originalType) ) {
+    protected JType convertType( JavaClass context, Type originalType ) {
+        return convertType( context, originalType, generatorPrefix, generatorSuffix, generatorPostfix);
+    }
+
+    protected JType convertType( JavaClass context, Type originalType, String generatorPrefix,
+                                 String generatorSuffix, String generatorPostfix ) {
+        JClass returnType = null;
+        if ( isCollectionType(originalType.getJavaClass()) ) {
+            if ( originalType.getActualTypeArguments().length == 0 ) {
+                returnType = codeModel.ref(originalType.getFullyQualifiedName());
+            } else {
+                List<JClass> narrowsList = new ArrayList<JClass>();
+                for ( Type type : originalType.getActualTypeArguments() ) {
+                    boolean found = true;
+                    for ( TypeVariable typeVariable : context.getTypeParameters() ) {
+                        if ( typeVariable.getName().equals( type.getFullyQualifiedName() ) ) {
+                            narrowsList.add( codeModel.ref( typeVariable.getName() ) );
+                        }
+                    }
+
+                    if ( !found ) {
+                        break;
+                    }
+                }
+
+                returnType = codeModel.ref(originalType.getFullyQualifiedName());
+
+                if ( narrowsList.size() == originalType.getActualTypeArguments().length ) {
+                    returnType = returnType.narrow( narrowsList );
+                }
+            }
+        } else if ( isSimpleType( originalType.getJavaClass() ) || isDtoType(originalType.getJavaClass()) ) {
             returnType = codeModel.ref( originalType.getFullyQualifiedName() );
-        } else if ( isJpaEntity( originalType ) ) {
+        } else if ( isJpaEntity( originalType.getJavaClass() ) ) {
             returnType = codeModel.ref(
-                prepareClassName(originalType.getFullyQualifiedName(), generatorSuffix)
+                prepareClassName(dtoPackage, originalType.getFullyQualifiedName(), generatorPrefix,
+                        generatorSuffix, generatorPostfix)
             );
         }
 
@@ -218,7 +342,8 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
         for ( JavaField field : entityClass.getFields() ) {
             boolean isId = false;
             for (Annotation annotation : field.getAnnotations()) {
-                if ( !annotation.getType().getFullyQualifiedName().equals(ID_ANNOTATION_CLASS_NAME) ) {
+                if ( !annotation.getType().getFullyQualifiedName().equals(Id.class.getCanonicalName())
+                        && !annotation.getType().getFullyQualifiedName().equals( Id.class.getSimpleName() ) ) {
                     continue;
                 }
 
@@ -236,6 +361,18 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
                 && !entityClass.getSuperJavaClass().getFullyQualifiedName().equals(
                 Object.class.getCanonicalName()) ) {
             result = detectIdKeyType( entityClass.getSuperJavaClass() );
+        }
+
+        return result;
+    }
+
+    protected Set<JavaField> collectAllFields( JavaClass javaClass ) {
+        Set<JavaField> result = new HashSet<JavaField>();
+
+        JavaClass parent = javaClass;
+        while ( parent != null ) {
+            result.addAll( Arrays.asList( parent.getFields() ) );
+            parent = parent.getSuperJavaClass();
         }
 
         return result;
@@ -267,29 +404,32 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
         getterMethod.body()._return( JExpr.refthis( clazzField.name() ) );
     }
 
-    protected JDefinedClass defineEnum( String className, String daoSuffix )
-            throws JClassAlreadyExistsException {
-        return _define(className, daoSuffix, true, ClassType.ENUM);
+    protected JDefinedClass defineInterface( String className, String generatedPackage ) throws JClassAlreadyExistsException {
+        return defineInterface( className, generatedPackage, generatorPrefix, generatorSuffix, generatorPostfix );
     }
 
-    protected JDefinedClass defineAnnotation( String className, String daoSuffix )
+    protected JDefinedClass defineInterface( String className, String generatedPackage, String prefix,
+                                             String suffix, String postfix)
             throws JClassAlreadyExistsException {
-        return _define(className, daoSuffix, true, ClassType.ANNOTATION_TYPE_DECL);
+        return _define(className, generatedPackage, prefix, suffix, postfix, true, ClassType.INTERFACE);
     }
 
-    protected JDefinedClass defineInterface( String className, String daoSuffix )
+    protected JDefinedClass defineClass( String className, String generatedPackage, boolean isAbstract )
             throws JClassAlreadyExistsException {
-        return _define(className, daoSuffix, true, ClassType.INTERFACE);
+        return _define(className, generatedPackage, generatorPrefix, generatorSuffix,
+                generatorPostfix, isAbstract, ClassType.CLASS);
     }
 
-    protected JDefinedClass defineClass( String className, String daoSuffix, boolean isAbstract )
+    protected JDefinedClass defineClass( String className, String generatedPackage, String prefix,
+                                         String suffix, String postfix, boolean isAbstract )
         throws JClassAlreadyExistsException {
-        return _define(className, daoSuffix, isAbstract, ClassType.CLASS);
+        return _define(className, generatedPackage, prefix, suffix, postfix, isAbstract, ClassType.CLASS);
     }
 
-    private JDefinedClass _define( String className, String daoSuffix, boolean isAbstract, ClassType type)
+    private JDefinedClass _define( String className, String generatedPackage, String prefix, String suffix, String postfix,
+                                   boolean isAbstract, ClassType type)
             throws JClassAlreadyExistsException {
-        String preparedClassName = prepareClassName( className, daoSuffix );
+        String preparedClassName = prepareClassName( generatedPackage, className, prefix, suffix, postfix);
         int bIndex = preparedClassName.lastIndexOf( "." );
         String packagePart = preparedClassName.substring( 0, bIndex );
         String classPart = preparedClassName.substring( bIndex + 1 );
@@ -300,17 +440,32 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
         }
 
         return codeModel._package( packagePart )
-                ._class( flags, classPart, type );
+                ._class(flags,  classPart, type);
     }
 
-    protected String prepareClassName( String name, String suffix ) {
-        if ( suffix == null ) {
-            throw new IllegalArgumentException( "<null>" );
+    protected String prepareClassName( String generatedPackage, String name ) {
+        return prepareClassName( generatedPackage, name, generatorPrefix, generatorSuffix, generatorPostfix);
+    }
+
+    protected String prepareClassName( String generatedPackage, String name,
+                                       String prefix, String suffix, String postfix) {
+        name = name.replace(basePackage, generatedPackage);
+
+        if ( suffix != null && !disableAffixesAttach && attachSuffixes ) {
+            name = name.replace(generatedPackage, generatedPackage + "." + suffix);
         }
 
-        int bIndex = name.lastIndexOf( "." );
-        return name.substring( 0, bIndex  )
-                + "." + suffix + "." + name.substring( bIndex + 1 );
+        if ( prefix != null && !disableAffixesAttach && attachPrefixes ) {
+            int bIndex = name.lastIndexOf(".");
+            name = name.substring(0, bIndex ) + "." + prefix + name.substring( bIndex + 1 );
+        }
+
+
+        if ( postfix != null && !disableAffixesAttach && attachPostfixes ) {
+            name = name + postfix;
+        }
+
+        return name;
     }
 
     protected abstract boolean isSupported( JavaClass entityClass );

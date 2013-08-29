@@ -22,9 +22,6 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
     private static final String DTO_METHOD_ANNOTATION_CLASS_NAME = "com.redshape.generators.annotations.dto.DtoMethod";
     private static final String COLLECTION_CLASS_NAME = "java.util.Collection";
 
-    @Parameter( property = "dtoSuffix", required = true, defaultValue = "dto" )
-    private String dtoSuffix = "dto";
-
     @Parameter( property = "dtoInterfaceClass", defaultValue = "java.io.Serializable")
     private String dtoInterfaceClass = "java.io.Serializable";
 
@@ -32,19 +29,45 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
     private Boolean generateMethods = true;
 
     public GenDtoMojo() {
-        super("DTO generator");
+        super("DTO generator", DTO_GENERATOR_PREFIX, DTO_GENERATOR_SUFFIX, DTO_GENERATOR_POSTFIX);
     }
 
     @Override
     protected void generateClass(JavaClass entityClazz) throws MojoExecutionException {
         try {
-            JDefinedClass dtoClazz = defineClass(entityClazz.getFullyQualifiedName(),
-                    dtoSuffix, entityClazz.isAbstract());
+            JDefinedClass dtoClazz = defineClass(entityClazz.getFullyQualifiedName(), dtoPackage,
+                    entityClazz.isAbstract());
 
-            if ( isJpaEntity( entityClazz.getSuperJavaClass() ) ) {
-                dtoClazz._extends(codeModel.ref(entityClazz.getSuperJavaClass().getFullyQualifiedName()));
+            if ( entityClazz.getSuperClass() != null && isJpaEntity( entityClazz.getSuperJavaClass() ) ) {
+                JClass parentClass = codeModel.ref(
+                        prepareClassName(
+                            dtoPackage, entityClazz.getSuperJavaClass().getFullyQualifiedName()
+                        )
+                    );
+
+                Type[] actualTypeArguments = entityClazz.getSuperClass().getActualTypeArguments();
+                if ( actualTypeArguments != null && actualTypeArguments.length > 0 ) {
+                    for ( Type narrow : actualTypeArguments ) {
+                        parentClass = parentClass.narrow(
+                            codeModel.ref(
+                                prepareClassName( dtoPackage, narrow.getFullyQualifiedName() )
+                            )
+                        );
+                    }
+                }
+
+                dtoClazz = dtoClazz._extends(parentClass);
             } else {
-                dtoClazz._implements( codeModel.ref(dtoInterfaceClass) );
+                dtoClazz._implements(codeModel.ref(dtoInterfaceClass));
+            }
+
+            if ( entityClazz.getTypeParameters().length > 0 ) {
+                for ( TypeVariable type : entityClazz.getTypeParameters() ) {
+                    dtoClazz.generify(
+                        type.getName(),
+                        codeModel.ref( prepareClassName(dtoPackage, type.getValue() ) )
+                    );
+                }
             }
 
             generateClassFields(dtoClazz, entityClazz);
@@ -56,17 +79,23 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
     }
 
     protected void processClassMethods( JDefinedClass dtoClazz, JavaClass entityClazz ) {
+        if ( !generateMethods ) {
+            return;
+        }
+
         for (JavaMethod method : entityClazz.getMethods() ) {
             if ( !hasAnnotation(method, DTO_METHOD_ANNOTATION_CLASS_NAME) ) {
                 continue;
             }
 
-            generateDtoMethod( dtoClazz, entityClazz, method );
+            getLog().info("Generating DTO method " + method.getName()
+                    + " for DTO " + dtoClazz.fullName() );
+            generateDtoMethod(dtoClazz, entityClazz, method);
         }
     }
 
     protected void generateDtoMethod( JDefinedClass dtoClazz, JavaClass entityClazz, JavaMethod method ) {
-        JType returnType = convertType( method.getReturnType().getJavaClass(), dtoSuffix );
+        JType returnType = convertType( entityClazz, method.getReturnType() );
         if ( returnType == null ) {
             getLog().error("Inconvertible method " + method.getName() + " return type");
             return;
@@ -75,7 +104,7 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
         boolean skip = false;
         Map<String, JType> parameters = new HashMap<String, JType>();
         for ( JavaParameter parameter : method.getParameters() ) {
-            JType parameterType = convertType( parameter.getType().getJavaClass(), dtoSuffix );
+            JType parameterType = convertType( entityClazz, parameter.getType() );
             if ( parameterType == null ) {
                 getLog().error("Inconvertible method " + method.getName() + " parameter " + parameter.getName() );
                 skip = true;
@@ -109,7 +138,9 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
             dtoMethod.param( parameterEntry.getValue(), parameterEntry.getKey() );
         }
 
-        dtoMethod.body().block().directStatement( method.getSourceCode() );
+        if ( !method.isAbstract() ) {
+            dtoMethod.body().block().directStatement(method.getSourceCode());
+        }
     }
     
     protected void processClassAnnotations( JDefinedClass dtoClazz, JavaClass entityClazz ) {
@@ -141,11 +172,15 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
                 (String) annotation.getNamedParameter("value"));
         String fieldType = normalizeAnnotationValue(
                 (String) annotation.getNamedParameter("type") ).replace(".class", "");
-        _generateClassField( dtoClazz, JMod.PRIVATE, codeModel.ref(fieldType), fieldName );
+        _generateClassField( dtoClazz, JMod.PRIVATE, codeModel.ref(fieldType), null, fieldName );
     }
 
     protected void generateClassFields( JDefinedClass dtoClazz, JavaClass entityClazz ) {
         for ( JavaField field : entityClazz.getFields() ) {
+            if ( field.isStatic() && skipStaticFields ) {
+                continue;
+            }
+
             generateClassField( dtoClazz, entityClazz, field );
         }
     }
@@ -154,7 +189,8 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
         String fieldName = field.getName();
         String aggregationType = "ID";
 
-        JClass fieldType = codeModel.ref( field.getType().getFullyQualifiedName() );
+        JClass fieldType = codeModel.ref(field.getType().getFullyQualifiedName() );
+
         JClass realType = null;
 
         boolean ignoreField = false;
@@ -168,13 +204,18 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
             } else if ( isJpaRelationType(annotationTypeName) ) {
                 isComplexType = true;
                 if ( annotation.getNamedParameter("targetEntity") != null ) {
+                    String className = normalizeAnnotationValue(
+                            (String)annotation.getNamedParameter("targetEntity") )
+                        .replace(".class", "");
+                    // Whe have class reference where package part has been reduced by JavaDocBuilder
+                    // which happens in a cases when two classes (reference and referent) exists in a
+                    // same package
+                    if ( !className.contains(".") ) {
+                        className = entityClass.getPackageName() + "." + className;
+                    }
+
                     realType = codeModel.ref(
-                        prepareClassName(
-                            normalizeAnnotationValue(
-                                (String)annotation.getNamedParameter("targetEntity")
-                            ).replace(".class", ""),
-                            dtoSuffix
-                        )
+                        prepareClassName(dtoPackage, className)
                     );
                 }
 
@@ -185,7 +226,8 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
             } else if ( annotationTypeName.equals( DTO_INCLUDE_ANNOTATION_CLASS_NAME ) ) {
                 isInclude = true;
                 if ( annotation.getNamedParameter("value") != null ) {
-                    aggregationType = normalizeAnnotationValue( (String) annotation.getNamedParameter("value") );
+                    aggregationType = normalizeAnnotationValue(
+                            (String) annotation.getNamedParameter("value") );
                 }
             }
         }
@@ -196,15 +238,21 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
         }
 
         if ( isComplexType ) {
-            fieldType = codeModel.ref( prepareClassName( fieldType.fullName(), dtoSuffix ) );
-        }
+            if ( !codeModel.ref(Collection.class).isAssignableFrom( fieldType ) ) {
+                fieldType = codeModel.ref( prepareClassName( dtoPackage, fieldType.fullName() ) );
 
-        if ( isComplexType ) {
-            if ( aggregationType.equals("AggregationType.ID") ) {
-                fieldName += "Id";
-                realType = codeModel.ref( Long.class );
+                if ( aggregationType.equals("AggregationType.ID") ) {
+                    fieldName += "Id";
+                    realType = codeModel.ref( Long.class );
+                }
+            } else {
+                fieldType = fieldType.narrow(
+                    codeModel.ref(
+                        prepareClassName( dtoPackage,
+                                field.getType().getActualTypeArguments()[0].getFullyQualifiedName() )
+                    )
+                );
             }
-
         }
 
         int flags = JMod.PRIVATE;
@@ -212,32 +260,42 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
             flags |= JMod.TRANSIENT;
         }
 
-        _generateClassField( dtoClazz, flags, Commons.select(realType, fieldType), fieldName );
+        if ( field.isStatic() ) {
+            flags |= JMod.STATIC;
+        }
+
+        String initializeExpression = null;
+        if ( field.isFinal() ) {
+            flags |= JMod.FINAL;
+            initializeExpression = field.getInitializationExpression();
+        }
+
+        _generateClassField( dtoClazz, flags, Commons.select(realType, fieldType), initializeExpression,
+                fieldName );
     }
 
-    private void _generateClassField( JDefinedClass dtoClazz, int flags, JClass type, String fieldName ) {
+    private void _generateClassField( JDefinedClass dtoClazz, int flags,
+                                      JClass type, String initializeExpression,
+                                      String fieldName ) {
         JFieldVar clazzField = dtoClazz.field(flags, type, fieldName );
 
         if ( type.isInterface() ) {
-            if ( codeModel.ref(Set.class).isAssignableFrom(type.erasure()) ) {
+            if ( isSetType(type.erasure().fullName()) ) {
                 clazzField.init( JExpr._new( codeModel.ref(HashSet.class) ) );
-            } else if ( codeModel.ref(List.class).isAssignableFrom(type.erasure()) ) {
+            } else if ( isListType(type.erasure().fullName()) ) {
                 clazzField.init( JExpr._new( codeModel.ref(ArrayList.class) ) );
-            } else if ( codeModel.ref(Collection.class).isAssignableFrom(type.erasure()) ) {
+            } else if ( isCollectionType(type.erasure().fullName()) ) {
                 clazzField.init( JExpr._new( codeModel.ref(HashSet.class) ) );
             }
-        } else if ( codeModel.ref(Collection.class).isAssignableFrom( type ) ) {
+        } else if ( isCollectionType(type.fullName()) ) {
             clazzField.init( JExpr._new( type ) );
         }
 
-        generateAccessors(dtoClazz, clazzField);
-    }
-
-    @Override
-    protected String prepareClassName(String name, String suffix) {
-        String className = super.prepareClassName(name, suffix);
-        className += "DTO";
-        return className;
+        if ( (flags & JMod.STATIC) == 0 ) {
+            generateAccessors(dtoClazz, clazzField);
+        } else if ( initializeExpression != null ) {
+            clazzField.init( JExpr.direct(initializeExpression) );
+        }
     }
 
     @Override

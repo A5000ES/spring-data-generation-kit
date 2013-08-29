@@ -58,6 +58,7 @@ public abstract class AbstractMojo extends org.apache.maven.plugin.AbstractMojo 
         value = StringUtils.trim(value, "\"");
         value = StringUtils.trim( value, "/");
         value = StringUtils.trim( value, "\\");
+        value = value.replaceAll("\" \\+ \"", "");
         return value;
     }
 

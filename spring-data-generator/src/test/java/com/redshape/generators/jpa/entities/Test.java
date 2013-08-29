@@ -21,10 +21,10 @@ import java.util.List;
         }
     ),
     @ConventionalQuery(
-            name = "findByUserId",
-            parameters = {
-                    @Parameter( value = "userId", type = Long.class )
-            }
+        name = "findByUserId",
+        parameters = {
+                @Parameter( value = "userId", type = Long.class )
+        }
     )
 })
 @NativeQueries({
@@ -38,14 +38,14 @@ import java.util.List;
         }
     ),
     @NativeQuery(
-            name = "deleteWhereUserIdIn",
-            isModifying = true,
-            isTransactional = true,
-            resultType = void.class,
-            value = "delete from Test where id in (:id)",
-            parameters = {
-                    @Parameter( value = "id", type = Long.class, isArray = true)
-            }
+        name = "deleteWhereUserIdIn",
+        isModifying = true,
+        isTransactional = true,
+        resultType = void.class,
+        value = "delete from Test where id in (:id)",
+        parameters = {
+                @Parameter( value = "id", type = Long.class, isArray = true)
+        }
     ),
     @NativeQuery(
         name = "countById",

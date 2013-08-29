@@ -1,6 +1,7 @@
 package com.redshape.generators.jpa.entities;
 
 import javax.persistence.Entity;
+import javax.persistence.Id;
 
 /**
  * Created by cyril on 8/28/13.
@@ -8,7 +9,7 @@ import javax.persistence.Entity;
 @Entity
 public class TestParent implements ITest {
 
-    @javax.persistence.Id
+    @Id
     Long id;
 
     public Long getId() {

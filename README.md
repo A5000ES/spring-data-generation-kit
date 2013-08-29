@@ -1,7 +1,12 @@
 ## Spring Data Generation Kit
 -----
-Version: 1.0.16-SNAPSHOT
+Version: 1.1.0-SNAPSHOT
 Contact e-mail: self@nikelin.ru
+
+[alpha] 1.1.0
+- New generators infrastructure
+- FreeMarker generator replaced with Sun CodeModel
+- Ability to specify methods with @DtoMethod
 
 1.0.22 features
 - Ability to specify custom interface which would be implemented by generated DTO classes

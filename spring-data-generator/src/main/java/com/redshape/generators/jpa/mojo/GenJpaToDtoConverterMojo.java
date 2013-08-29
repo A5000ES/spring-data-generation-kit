@@ -12,9 +12,7 @@ import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
 
 import java.lang.reflect.Method;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -29,6 +27,7 @@ public class GenJpaToDtoConverterMojo extends AbstractGeneratorMojo {
     private static final String DTO_EXCLUDE_ANNOTATION_CLASS_NAME = "com.redshape.generators.annotations.dto.DtoExclude";
     private static final String METHODS_CACHE_FIELD_NAME = "METHODS";
     private static final String CONVERSATION_METHOD_NOT_FOUND_EXCEPTION = "Conversion method not found: %s";
+    private static final String LIST_CONVERTER_METHOD_NAME = "convertToDtoList";
 
     @Parameter( property = "convertersPackage", required = true )
     private String convertersPackage;
@@ -39,7 +38,7 @@ public class GenJpaToDtoConverterMojo extends AbstractGeneratorMojo {
     private JFieldVar cacheField;
 
     public GenJpaToDtoConverterMojo() {
-        super("JPA to DTO conversion services generator");
+        super("JPA to DTO conversion services generator", "", "", "");
     }
 
     protected void init() throws JClassAlreadyExistsException {
@@ -49,12 +48,14 @@ public class GenJpaToDtoConverterMojo extends AbstractGeneratorMojo {
 
         this.converterClazz = codeModel._package(convertersPackage)
                 ._class( JMod.PUBLIC, CONVERTER_CLASS_NAME );
-        this.converterClazz.annotate( codeModel.ref(SERVICE_ANNOTATION_CLASS_NAME) );
-
-
     }
     @Override
     protected void generateClass(JavaClass entityClazz) throws MojoExecutionException {
+        if ( entityClazz.isAbstract() ) {
+            getLog().info("Skipping abstract class " + entityClazz.getFullyQualifiedName() );
+            return;
+        }
+
         generateConverter(entityClazz);
     }
 
@@ -63,6 +64,7 @@ public class GenJpaToDtoConverterMojo extends AbstractGeneratorMojo {
         try {
             init();
             generateTemplateConvertMethod(converterClazz);
+            generateTemplateListConvertMethod(converterClazz);
 
             super.execute();
         } catch (JClassAlreadyExistsException e) {
@@ -72,21 +74,40 @@ public class GenJpaToDtoConverterMojo extends AbstractGeneratorMojo {
 
     protected void generateConverter( JavaClass entityClazz ) {
         JClass entityClazzModel = codeModel.ref( entityClazz.getFullyQualifiedName() );
-        JClass dtoRef = codeModel.ref( prepareClassName(entityClazz.getFullyQualifiedName(), "dto") + "DTO");
+        JClass dtoRef = codeModel.ref(
+            prepareClassName(
+                dtoPackage,
+                entityClazz.getFullyQualifiedName(),
+                DTO_GENERATOR_PREFIX,
+                DTO_GENERATOR_SUFFIX,
+                DTO_GENERATOR_POSTFIX
+            )
+        );
 
         JMethod converterMethod = converterClazz.method(JMod.PUBLIC,
-                entityClazzModel, CONVERTER_METHOD_NAME);
+                codeModel.ref(prepareClassName(dtoPackage, entityClazz.getFullyQualifiedName(),
+                        DTO_GENERATOR_PREFIX, DTO_GENERATOR_SUFFIX, DTO_GENERATOR_POSTFIX)),
+                CONVERTER_METHOD_NAME);
 
         JVar converterMethodParam = converterMethod.param( entityClazzModel, "value" );
 
         JBlock block = converterMethod.body();
         JVar dtoInstance = block.decl( dtoRef, "result", JExpr._new(dtoRef) );
 
-        for ( JavaField field : entityClazz.getFields() ) {
+        for ( JavaField field : collectAllFields(entityClazz) ) {
+            if ( field.isStatic() && skipStaticFields ) {
+                continue;
+            }
+
             boolean isConvertible = isConvertibleField(field);
+            if ( !isConvertible && !isSimpleType(field.getType().getJavaClass()) ) {
+                continue;
+            }
 
             JExpression valueExpr;
             String fieldName;
+            String getterName;
+            String setterName;
             if ( isConvertible ) {
                 boolean dtoAggregationType = false;
                 for ( Annotation annotation : field.getAnnotations() ) {
@@ -101,37 +122,105 @@ public class GenJpaToDtoConverterMojo extends AbstractGeneratorMojo {
 
                 if ( dtoAggregationType ) {
                     fieldName = field.getName();
-                    valueExpr = JExpr.cast( dtoRef, JExpr._this().invoke("convertToDto")
-                        .arg(
-                                converterMethodParam.invoke(generateGetterName(field.getName()))
+
+                    JClass resultType;
+                    if ( isCollectionType( field.getType().getJavaClass() ) ) {
+                        if ( isListType( field.getType().getJavaClass() ) ) {
+                            resultType = codeModel.ref( List.class );
+                        } else if ( isSetType( field.getType().getJavaClass() ) ) {
+                            resultType = codeModel.ref(Set.class);
+                        } else {
+                            resultType = codeModel.ref(Collection.class);
+                        }
+
+                        resultType = resultType.narrow(
+                            codeModel.ref(
+                                prepareClassName( dtoPackage,
+                                        field.getType().getActualTypeArguments()[0].getFullyQualifiedName(),
+                                        DTO_GENERATOR_PREFIX, DTO_GENERATOR_SUFFIX, DTO_GENERATOR_POSTFIX )
+                            )
+                        );
+                    } else {
+                        resultType = codeModel.ref(
+                                prepareClassName(dtoPackage, field.getType().getFullyQualifiedName(),
+                                        DTO_GENERATOR_PREFIX, DTO_GENERATOR_SUFFIX, DTO_GENERATOR_POSTFIX)
+                        );
+                    }
+
+                    valueExpr = JExpr.cast(
+                        resultType,
+                        JExpr._this().invoke("convertToDto").arg(
+                            converterMethodParam.invoke( getterName = generateGetterName(field.getName()) )
                         )
                     );
                 } else {
                     fieldName = field.getName() + "Id";
-                    valueExpr = converterMethodParam.invoke( generateGetterName( field.getName() ) )
+                    valueExpr = converterMethodParam.invoke( getterName = generateGetterName( field.getName() ) )
                             .invoke( generateGetterName("id") );
                 }
             } else {
                 fieldName = field.getName();
-                valueExpr = converterMethodParam.invoke( generateGetterName(fieldName) );
+                valueExpr = converterMethodParam.invoke( getterName = generateGetterName(fieldName) );
+            }
+
+            setterName = generateSetterName(fieldName);
+            if ( !isMethodExists( setterName, dtoRef.fullName() ) ||
+                    !isMethodExists(getterName, entityClazz.getFullyQualifiedName()) ) {
+                getLog().debug("Skipping field of " + entityClazz.getFullyQualifiedName()
+                        + " with no setter and/or getter '" + getterName + "'...");
+                continue;
             }
 
             block.add(
-                dtoInstance.invoke( generateSetterName(fieldName) ).arg( valueExpr )
+                dtoInstance.invoke( setterName ).arg( valueExpr )
             );
         }
 
         block._return(dtoInstance);
     }
 
+    /**
+     * @param converterClazz
+     */
     protected void generateTemplateListConvertMethod( JDefinedClass converterClazz ) {
+        JMethod method = converterClazz.method(
+            JMod.PUBLIC,
+            codeModel.ref(List.class).narrow(Object.class),
+            LIST_CONVERTER_METHOD_NAME
+        );
 
+        JVar methodParam =
+                method.param( codeModel.ref(Collection.class).narrow(Object.class), "records" );
+
+        JBlock methodBody = method.body();
+        methodBody._if( methodParam.eq( JExpr._null() ) )
+                ._then()
+                    ._throw(
+                        JExpr._new( codeModel.ref( IllegalStateException.class ) )
+                        .arg("<null>") );
+
+        JVar result = methodBody.decl( codeModel.ref(List.class), "result")
+                .init( JExpr._new( codeModel.ref(ArrayList.class) ) );
+        JForEach recordsIterator = methodBody.forEach( codeModel.ref(Object.class), "record", methodParam );
+        recordsIterator.body()
+                ._if( recordsIterator.var().eq( JExpr._null() ) )
+                    ._then()
+                        ._continue();
+        recordsIterator.body()
+            .invoke( result, "add" )
+                .arg(
+                    JExpr._this()
+                         .invoke(CONVERTER_METHOD_NAME)
+                         .arg( recordsIterator.var() )
+                );
+
+        methodBody._return( result );
     }
 
     protected void generateTemplateConvertMethod( JDefinedClass converterClazz ) {
         defineConverterMethodsCache(converterClazz);
 
-        JMethod method = converterClazz.method(JMod.PUBLIC, JType.parse(codeModel, "void"), "convertToDto");
+        JMethod method = converterClazz.method(JMod.PUBLIC, codeModel.ref("T"), "convertToDto");
         JTypeVar typeVar = method.generify("T");
 
         JVar methodParam = method.param( codeModel.ref(Object.class), "value" );
@@ -165,9 +254,12 @@ public class GenJpaToDtoConverterMojo extends AbstractGeneratorMojo {
         JTryBlock convertBlock = method.body()._try();
         convertBlock.body()
                 ._return(
-                    methodDeclaration.invoke("invoke")
-                        .arg( JExpr._this() )
-                        .arg( JExpr.newArray( codeModel.ref(Object.class) ).add( methodParam ) )
+                    JExpr.cast(
+                            typeVar,
+                            methodDeclaration.invoke("invoke")
+                                    .arg(JExpr._this())
+                                    .arg(JExpr.newArray(codeModel.ref(Object.class)).add(methodParam))
+                    )
                 );
 
         JCatchBlock covertBlockCatch = convertBlock._catch( codeModel.ref(Exception.class) );

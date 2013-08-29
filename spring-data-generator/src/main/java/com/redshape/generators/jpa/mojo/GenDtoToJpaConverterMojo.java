@@ -12,7 +12,7 @@ import org.apache.maven.plugins.annotations.Mojo;
 public class GenDtoToJpaConverterMojo extends AbstractGeneratorMojo {
 
     public GenDtoToJpaConverterMojo() {
-        super("DTO to JPA conversion services generator");
+        super("DTO to JPA conversion services generator", "", "", "");
     }
 
     @Override
