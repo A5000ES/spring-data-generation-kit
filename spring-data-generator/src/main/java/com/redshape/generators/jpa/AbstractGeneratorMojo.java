@@ -246,16 +246,24 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
         generateGetter( clazz, clazzField);
     }
 
+    protected String generateSetterName( String fieldName ) {
+        return "set" + StringUtils.ucfirst( fieldName );
+    }
+
     protected void generateSetter( JDefinedClass clazz, JFieldVar clazzField ) {
         JMethod setterMethod = clazz.method(JMod.PUBLIC, JType.parse(codeModel, "void"),
-                "set" + StringUtils.ucfirst( clazzField.name() ) );
+                generateSetterName(clazzField.name()) );
         JVar valueVar = setterMethod.param( clazzField.type(), "value" );
         setterMethod.body().assign( JExpr.refthis( clazzField.name() ), valueVar);
     }
 
+    protected String generateGetterName( String name ) {
+        return "get" + StringUtils.ucfirst(name);
+    }
+
     protected void generateGetter( JDefinedClass clazz, JFieldVar clazzField ) {
         JMethod getterMethod = clazz.method(JMod.PUBLIC, clazzField.type(),
-                "get" + StringUtils.ucfirst(clazzField.name()));
+               generateGetterName(clazzField.name()) );
         getterMethod.body()._return( JExpr.refthis( clazzField.name() ) );
     }
 
@@ -308,4 +316,5 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
     protected abstract boolean isSupported( JavaClass entityClass );
 
     protected abstract void generateClass( JavaClass entityClass ) throws MojoExecutionException;
+
 }

@@ -8,9 +8,7 @@ import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 /**
  * Created by cyril on 8/28/13.
@@ -22,6 +20,7 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
     private static final String DTO_INCLUDE_ANNOTATION_CLASS_NAME = "com.redshape.generators.annotations.dto.DtoInclude";
     private static final String DTO_EXTENDS_ANNOTATION_CLASS_NAME = "com.redshape.generators.annotations.dto.DtoExtend";
     private static final String DTO_METHOD_ANNOTATION_CLASS_NAME = "com.redshape.generators.annotations.dto.DtoMethod";
+    private static final String COLLECTION_CLASS_NAME = "java.util.Collection";
 
     @Parameter( property = "dtoSuffix", required = true, defaultValue = "dto" )
     private String dtoSuffix = "dto";
@@ -155,11 +154,11 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
         String fieldName = field.getName();
         String aggregationType = "ID";
 
-        JType fieldType = codeModel.ref( field.getType().getFullyQualifiedName() );
-        JType realType = fieldType;
+        JClass fieldType = codeModel.ref( field.getType().getFullyQualifiedName() );
+        JClass realType = null;
 
         boolean ignoreField = false;
-        boolean isComplexType = isSimpleType( field.getType().getJavaClass() );
+        boolean isComplexType = !isSimpleType( field.getType().getJavaClass() );
         boolean isInclude = false;
         for ( Annotation annotation : field.getAnnotations() ) {
             String annotationTypeName = annotation.getType().getFullyQualifiedName();
@@ -168,12 +167,20 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
                 break;
             } else if ( isJpaRelationType(annotationTypeName) ) {
                 isComplexType = true;
-                if ( annotation.getNamedParameter("targetType") != null ) {
+                if ( annotation.getNamedParameter("targetEntity") != null ) {
                     realType = codeModel.ref(
-                        normalizeAnnotationValue(
-                            (String)annotation.getNamedParameter("targetType")
-                        ).replace(".class", "")
+                        prepareClassName(
+                            normalizeAnnotationValue(
+                                (String)annotation.getNamedParameter("targetEntity")
+                            ).replace(".class", ""),
+                            dtoSuffix
+                        )
                     );
+                }
+
+                if ( field.getType().getJavaClass().isA(COLLECTION_CLASS_NAME) ) {
+                    realType = codeModel.ref(field.getType().getFullyQualifiedName())
+                            .narrow( Commons.select(realType, fieldType) );
                 }
             } else if ( annotationTypeName.equals( DTO_INCLUDE_ANNOTATION_CLASS_NAME ) ) {
                 isInclude = true;
@@ -189,9 +196,15 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
         }
 
         if ( isComplexType ) {
+            fieldType = codeModel.ref( prepareClassName( fieldType.fullName(), dtoSuffix ) );
+        }
+
+        if ( isComplexType ) {
             if ( aggregationType.equals("AggregationType.ID") ) {
                 fieldName += "Id";
+                realType = codeModel.ref( Long.class );
             }
+
         }
 
         int flags = JMod.PRIVATE;
@@ -202,8 +215,21 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
         _generateClassField( dtoClazz, flags, Commons.select(realType, fieldType), fieldName );
     }
 
-    private void _generateClassField( JDefinedClass dtoClazz, int flags, JType type, String fieldName ) {
+    private void _generateClassField( JDefinedClass dtoClazz, int flags, JClass type, String fieldName ) {
         JFieldVar clazzField = dtoClazz.field(flags, type, fieldName );
+
+        if ( type.isInterface() ) {
+            if ( codeModel.ref(Set.class).isAssignableFrom(type.erasure()) ) {
+                clazzField.init( JExpr._new( codeModel.ref(HashSet.class) ) );
+            } else if ( codeModel.ref(List.class).isAssignableFrom(type.erasure()) ) {
+                clazzField.init( JExpr._new( codeModel.ref(ArrayList.class) ) );
+            } else if ( codeModel.ref(Collection.class).isAssignableFrom(type.erasure()) ) {
+                clazzField.init( JExpr._new( codeModel.ref(HashSet.class) ) );
+            }
+        } else if ( codeModel.ref(Collection.class).isAssignableFrom( type ) ) {
+            clazzField.init( JExpr._new( type ) );
+        }
+
         generateAccessors(dtoClazz, clazzField);
     }
 

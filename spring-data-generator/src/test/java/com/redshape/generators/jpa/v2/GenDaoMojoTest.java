@@ -2,6 +2,7 @@ package com.redshape.generators.jpa.v2;
 
 import com.redshape.generators.jpa.mojo.GenDaoMojo;
 import com.redshape.generators.jpa.mojo.GenDtoMojo;
+import com.redshape.generators.jpa.mojo.GenJpaToDtoConverterMojo;
 import com.redshape.generators.jpa.utils.Commons;
 import org.apache.maven.model.Build;
 import org.apache.maven.model.Plugin;
@@ -48,6 +49,25 @@ public class GenDaoMojoTest extends AbstractMojoTestCase {
         mojoExecution.setConfiguration( configuration );
 
         GenDtoMojo mojo = (GenDtoMojo) lookupConfiguredMojo(newMavenSession(project), mojoExecution);
+        mojo.setProject(project);
+        mojo.execute();
+        assertNotNull( mojo );
+    }
+
+    public void testJpaToDto() throws Exception {
+        Xpp3Dom configuration = createConfiguration();
+
+        Xpp3Dom convertersPackage = new Xpp3Dom("convertersPackage");
+        convertersPackage.setValue("com.redshape.generators.jpa.services");
+        configuration.addChild(convertersPackage);
+
+        MavenProject project = createProject( configuration );
+
+        MojoExecution mojoExecution = newMojoExecution("gen-jpa-converter");
+        mojoExecution.setConfiguration( configuration );
+
+        GenJpaToDtoConverterMojo mojo = (GenJpaToDtoConverterMojo)
+                lookupConfiguredMojo(newMavenSession(project), mojoExecution);
         mojo.setProject(project);
         mojo.execute();
         assertNotNull( mojo );

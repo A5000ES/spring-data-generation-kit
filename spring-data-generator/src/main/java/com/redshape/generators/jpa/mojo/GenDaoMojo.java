@@ -152,12 +152,16 @@ public class GenDaoMojo extends AbstractGeneratorMojo {
                                        boolean appendPagerParam,
                                        boolean appendSortingParam ) {
         JClass returnType = entityClazz;
-        if ( spec.isPageable ) {
+        if ( appendPagerParam ) {
             returnType = codeModel.ref( PAGE_CLASS_NAME )
                     .narrow( entityClazz );
-        } else if ( spec.isCollection ) {
-            returnType = codeModel.ref(List.class.getCanonicalName())
-                    .narrow( entityClazz );
+        } else {
+            if ( spec.resultType != null ) {
+                returnType = codeModel.ref( spec.resultType );
+            } else if ( spec.isCollection ) {
+                returnType = codeModel.ref(List.class.getCanonicalName())
+                        .narrow( entityClazz );
+            }
         }
 
         JMethod method = daoClazz.method(JMod.PUBLIC, returnType, spec.name );
@@ -224,12 +228,23 @@ public class GenDaoMojo extends AbstractGeneratorMojo {
 
     protected QuerySpec createQuerySpec( Annotation annotation ) {
         QuerySpec spec = new QuerySpec();
-        spec.name = normalizeAnnotationValue( Commons.select((String) annotation.getNamedParameter("name"), "") );
+        spec.name = normalizeAnnotationValue(
+                Commons.select((String) annotation.getNamedParameter("name"), "") );
         spec.isNative = isNativeQuery(annotation);
+        spec.resultType = normalizeAnnotationValue(
+                Commons.select((String) annotation.getNamedParameter("resultType"), "") )
+                    .replace(".class", "");
+        if ( spec.resultType.isEmpty() ) {
+            spec.resultType = null;
+        }
         if ( spec.isNative ) {
-            spec.value = Commons.select( (String) annotation.getParameterValue(), "" );
+            spec.value = normalizeAnnotationValue(
+                Commons.select( (String) annotation.getNamedParameter("value"), "" )
+            );
         }
 
+        spec.isModifying = Boolean.valueOf(
+                Commons.select( (String) annotation.getNamedParameter("isModifying"), "false") ) ;
         spec.isSortable = Boolean.valueOf(
                 Commons.select( (String) annotation.getNamedParameter("isSortable"), "false") ) ;
         spec.isTransactional = Boolean.valueOf(
@@ -315,6 +330,7 @@ public class GenDaoMojo extends AbstractGeneratorMojo {
 
         String name;
         String value;
+        String resultType;
 
         List<QuerySpecParam> parameters = new ArrayList<QuerySpecParam>();
     }

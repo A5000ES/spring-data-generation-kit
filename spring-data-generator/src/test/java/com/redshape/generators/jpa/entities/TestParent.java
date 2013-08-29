@@ -6,7 +6,7 @@ import javax.persistence.Entity;
  * Created by cyril on 8/28/13.
  */
 @Entity
-public class TestParent {
+public class TestParent implements ITest {
 
     @javax.persistence.Id
     Long id;
