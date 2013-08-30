@@ -3,7 +3,14 @@
 Version: 1.1.0-SNAPSHOT
 Contact e-mail: self@nikelin.ru
 
-[alpha] 1.1.0
+1.1.1 changes
+- Converter logic issues fixed ( synthetic fields, handling cases with inaccessible or non-exists fields accessor, null-check added, etc. )
+- DTO issues fixed (lists support improved,
+    static & abstract methods generation added, DTO generic types handling improved )
+- Some general problems solved: types comparing for a cases when package has
+not been  detected by QDox, constants moved to abstract generator mojo
+
+[new!] 1.1.0 chages
 - New generators infrastructure
 - FreeMarker generator replaced with Sun CodeModel
 - Ability to specify methods with @DtoMethod

@@ -23,8 +23,8 @@ public class GenJpaToDtoConverterMojo extends AbstractGeneratorMojo {
 
     private static final String CONVERTER_CLASS_NAME = "DtoConversionService";
     private static final String CONVERTER_METHOD_NAME = "convertToDto";
-    private static final String DTO_INCLUDE_ANNOTATION_CLASS_NAME = "com.redshape.generators.annotations.dto.DtoInclude";
-    private static final String DTO_EXCLUDE_ANNOTATION_CLASS_NAME = "com.redshape.generators.annotations.dto.DtoExclude";
+    private static final String DTO_INCLUDE_ANNOTATION_CLASS_NAME = "DtoInclude";
+    private static final String DTO_EXCLUDE_ANNOTATION_CLASS_NAME = "DtoExclude";
     private static final String METHODS_CACHE_FIELD_NAME = "METHODS";
     private static final String CONVERSATION_METHOD_NOT_FOUND_EXCEPTION = "Conversion method not found: %s";
     private static final String LIST_CONVERTER_METHOD_NAME = "convertToDtoList";
@@ -94,24 +94,19 @@ public class GenJpaToDtoConverterMojo extends AbstractGeneratorMojo {
         JBlock block = converterMethod.body();
         JVar dtoInstance = block.decl( dtoRef, "result", JExpr._new(dtoRef) );
 
-        for ( JavaField field : collectAllFields(entityClazz) ) {
-            if ( field.isStatic() && skipStaticFields ) {
-                continue;
-            }
-
-            boolean isConvertible = isConvertibleField(field);
-            if ( !isConvertible && !isSimpleType(field.getType().getJavaClass()) ) {
-                continue;
-            }
+        Set<CollectedJavaField> collectedFields = collectConvertibleFields(entityClazz);
+        for ( CollectedJavaField collectedField : collectedFields ) {
+            JavaField field = collectedField.field;
 
             JExpression valueExpr;
             String fieldName;
             String getterName;
             String setterName;
-            if ( isConvertible ) {
+            JClass resultType;
+            if ( collectedField.isConvertible ) {
                 boolean dtoAggregationType = false;
                 for ( Annotation annotation : field.getAnnotations() ) {
-                    if ( !annotation.getType().getFullyQualifiedName().equals( DTO_INCLUDE_ANNOTATION_CLASS_NAME ) ) {
+                    if ( !isA(annotation.getType().getJavaClass(), DTO_INCLUDE_ANNOTATION_CLASS_NAME ) ) {
                         continue;
                     }
 
@@ -123,7 +118,6 @@ public class GenJpaToDtoConverterMojo extends AbstractGeneratorMojo {
                 if ( dtoAggregationType ) {
                     fieldName = field.getName();
 
-                    JClass resultType;
                     if ( isCollectionType( field.getType().getJavaClass() ) ) {
                         if ( isListType( field.getType().getJavaClass() ) ) {
                             resultType = codeModel.ref( List.class );
@@ -155,25 +149,39 @@ public class GenJpaToDtoConverterMojo extends AbstractGeneratorMojo {
                     );
                 } else {
                     fieldName = field.getName() + "Id";
-                    valueExpr = converterMethodParam.invoke( getterName = generateGetterName( field.getName() ) )
-                            .invoke( generateGetterName("id") );
+                    resultType = codeModel.ref( Long.class);
+
+                    JInvocation valueAccessInvocation =
+                            converterMethodParam.invoke( getterName = generateGetterName( field.getName() ) );
+                    valueExpr = JOp.cond( JOp.not( valueAccessInvocation.eq( JExpr._null() ) ),
+                               valueAccessInvocation.invoke( generateGetterName("id") ),
+                               JExpr._null() );
                 }
             } else {
+                resultType = codeModel.ref( field.getType().getFullyQualifiedName() );
                 fieldName = field.getName();
                 valueExpr = converterMethodParam.invoke( getterName = generateGetterName(fieldName) );
             }
 
             setterName = generateSetterName(fieldName);
-            if ( !isMethodExists( setterName, dtoRef.fullName() ) ||
-                    !isMethodExists(getterName, entityClazz.getFullyQualifiedName()) ) {
-                getLog().debug("Skipping field of " + entityClazz.getFullyQualifiedName()
+            if ( (!isMethodExists( setterName, dtoRef.fullName() ) ||
+                    !isMethodExists(getterName, entityClazz.getFullyQualifiedName()) )
+                    && !isSyntheticField(field) ) {
+                getLog().warn("Skipping field of " + entityClazz.getFullyQualifiedName()
                         + " with no setter and/or getter '" + getterName + "'...");
                 continue;
             }
 
-            block.add(
-                dtoInstance.invoke( setterName ).arg( valueExpr )
-            );
+            JInvocation setterInvocation = dtoInstance.invoke( setterName );
+            if ( collectedField.isConvertible ) {
+                JVar convertedValueVar = block.decl( resultType, fieldName + "Converted" )
+                        .init( valueExpr );
+
+                block._if( JOp.not( convertedValueVar.eq(JExpr._null()) ) )
+                        ._then().add( setterInvocation.arg(convertedValueVar) );
+            } else {
+                block.add( setterInvocation.arg( valueExpr ) );
+            }
         }
 
         block._return(dtoInstance);
@@ -310,14 +318,19 @@ public class GenJpaToDtoConverterMojo extends AbstractGeneratorMojo {
 
     protected boolean isConvertibleField( JavaField field ) {
         boolean isComplex = !this.isSimpleType(field.getType().getJavaClass());
+        if ( !isComplex ) {
+            return false;
+        }
+
         boolean isIncluded = false;
         boolean isExcluded = false;
         for ( Annotation annotation : field.getAnnotations() ) {
-            String annotationTypeName = annotation.getType().getFullyQualifiedName();
-            if ( annotationTypeName.equals(DTO_INCLUDE_ANNOTATION_CLASS_NAME) ) {
+            if ( isA(annotation.getType().getJavaClass(), DTO_INCLUDE_ANNOTATION_CLASS_NAME) ) {
                 isIncluded = true;
-            } else if ( annotationTypeName.equals(DTO_EXCLUDE_ANNOTATION_CLASS_NAME) ) {
+                break;
+            } else if ( isA( annotation.getType().getJavaClass(), DTO_EXCLUDE_ANNOTATION_CLASS_NAME ) ) {
                 isExcluded = true;
+                break;
             }
         }
 
@@ -327,5 +340,34 @@ public class GenJpaToDtoConverterMojo extends AbstractGeneratorMojo {
     @Override
     protected boolean isSupported(JavaClass entityClass) {
         return isJpaEntity(entityClass);
+    }
+
+    protected Set<CollectedJavaField> collectConvertibleFields(JavaClass javaClass) {
+        Set<JavaField> fields = super.collectAllFields(javaClass);
+        Set<CollectedJavaField> result = new HashSet<CollectedJavaField>();
+        for ( JavaField field : fields ) {
+            if ( field.isStatic() && skipStaticFields ) {
+                continue;
+            }
+
+            boolean isConvertible = isConvertibleField(field);
+            if ( !isConvertible && !isSimpleType(field.getType().getJavaClass()) ) {
+                continue;
+            }
+
+            result.add( new CollectedJavaField(isConvertible, field) );
+        }
+
+        return result;
+    }
+
+    class CollectedJavaField {
+        final boolean isConvertible;
+        final JavaField field;
+
+        CollectedJavaField(boolean convertible, JavaField field) {
+            this.isConvertible = convertible;
+            this.field = field;
+        }
     }
 }

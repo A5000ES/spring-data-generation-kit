@@ -16,12 +16,6 @@ import java.util.*;
 @Mojo( name = "gen-dto")
 public class GenDtoMojo extends AbstractGeneratorMojo {
 
-    private static final String DTO_EXCLUDE_ANNOTATION_CLASS_NAME = "com.redshape.generators.annotations.dto.DtoExclude";
-    private static final String DTO_INCLUDE_ANNOTATION_CLASS_NAME = "com.redshape.generators.annotations.dto.DtoInclude";
-    private static final String DTO_EXTENDS_ANNOTATION_CLASS_NAME = "com.redshape.generators.annotations.dto.DtoExtend";
-    private static final String DTO_METHOD_ANNOTATION_CLASS_NAME = "com.redshape.generators.annotations.dto.DtoMethod";
-    private static final String COLLECTION_CLASS_NAME = "java.util.Collection";
-
     @Parameter( property = "dtoInterfaceClass", defaultValue = "java.io.Serializable")
     private String dtoInterfaceClass = "java.io.Serializable";
 
@@ -145,8 +139,8 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
     
     protected void processClassAnnotations( JDefinedClass dtoClazz, JavaClass entityClazz ) {
         for ( Annotation annotation : entityClazz.getAnnotations() ) {
-            String annotationTypeName = annotation.getType().getFullyQualifiedName();
-            if ( annotationTypeName.equals( DTO_EXTENDS_ANNOTATION_CLASS_NAME) ) {
+            if ( isA( annotation.getType().getJavaClass(),
+                    DTO_EXTENDS_ANNOTATION_CLASS_NAME) ) {
                 processExtendsAnnotation( dtoClazz, entityClazz, annotation );
             }
         }
@@ -197,11 +191,10 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
         boolean isComplexType = !isSimpleType( field.getType().getJavaClass() );
         boolean isInclude = false;
         for ( Annotation annotation : field.getAnnotations() ) {
-            String annotationTypeName = annotation.getType().getFullyQualifiedName();
-            if ( annotationTypeName.equals(DTO_EXCLUDE_ANNOTATION_CLASS_NAME) ) {
+            if ( isA(annotation.getType().getJavaClass(), DTO_EXCLUDE_ANNOTATION_CLASS_NAME) ) {
                 ignoreField = true;
                 break;
-            } else if ( isJpaRelationType(annotationTypeName) ) {
+            } else if ( isJpaRelationType(annotation.getType().getJavaClass()) ) {
                 isComplexType = true;
                 if ( annotation.getNamedParameter("targetEntity") != null ) {
                     String className = normalizeAnnotationValue(
@@ -219,11 +212,11 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
                     );
                 }
 
-                if ( field.getType().getJavaClass().isA(COLLECTION_CLASS_NAME) ) {
+                if ( isCollectionType( field.getType().getJavaClass() ) )  {
                     realType = codeModel.ref(field.getType().getFullyQualifiedName())
                             .narrow( Commons.select(realType, fieldType) );
                 }
-            } else if ( annotationTypeName.equals( DTO_INCLUDE_ANNOTATION_CLASS_NAME ) ) {
+            } else if ( isA( annotation.getType().getJavaClass(), DTO_INCLUDE_ANNOTATION_CLASS_NAME ) ) {
                 isInclude = true;
                 if ( annotation.getNamedParameter("value") != null ) {
                     aggregationType = normalizeAnnotationValue(
@@ -238,7 +231,7 @@ public class GenDtoMojo extends AbstractGeneratorMojo {
         }
 
         if ( isComplexType ) {
-            if ( !codeModel.ref(Collection.class).isAssignableFrom( fieldType ) ) {
+            if ( !isCollectionType( fieldType.fullName() ) ) {
                 fieldType = codeModel.ref( prepareClassName( dtoPackage, fieldType.fullName() ) );
 
                 if ( aggregationType.equals("AggregationType.ID") ) {

@@ -29,17 +29,15 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
 
     public static final String ENTITY_ANNOTATION_CLASS_NAME
             = "javax.persistence.Entity";
-    public static final String ID_ANNOTATION_CLASS_NAME
-            = "javax.persistence.Id";
     public static final String SERVICE_ANNOTATION_CLASS_NAME
             = "org.springframework.stereotype.Service";
-    private static final String WELCOM_MESSAGE
+    private static final String WELCOME_MESSAGE
             = "----------------------------   Generator: %s  --------------------------------------------";
 
-    private static final String ONE_TO_MANY_ANNOTATION_CLASS_NAME = "javax.persistence.OneToMany";
-    private static final String ONE_TO_ONE_ANNOTATION_CLASS_NAME = "javax.persistence.OneToOne";
-    private static final String MANY_TO_ONE_ANNOTATION_CLASS_NAME = "javax.persistence.ManyToOne";
-    private static final String MANY_TO_MANY_ANNOTATION_CLASS_NAME = "javax.persistence.ManyToMany";
+    public static final String DTO_EXCLUDE_ANNOTATION_CLASS_NAME = "DtoExclude";
+    public static final String DTO_INCLUDE_ANNOTATION_CLASS_NAME = "DtoInclude";
+    public static final String DTO_EXTENDS_ANNOTATION_CLASS_NAME = "DtoExtend";
+    public static final String DTO_METHOD_ANNOTATION_CLASS_NAME = "DtoMethod";
 
     protected final JCodeModel codeModel;
     protected JavaDocBuilder classMetaBuilder;
@@ -114,7 +112,10 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
     }
 
     protected boolean isA( JavaClass classType, String className ) {
-        return classType.getName().endsWith( className );
+        return classType.getFullyQualifiedName().equals(className)
+                || classType.getPackageName().isEmpty() && classType.getName().endsWith( className )
+                || (classType.getFullyQualifiedName().substring(
+                        classType.getFullyQualifiedName().lastIndexOf(".") + 1).equals(className) );
     }
 
     protected String[] findClasses( String sourceRoot, String classPattern ) {
@@ -136,7 +137,7 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
 
     @Override
     public void execute() throws MojoExecutionException, MojoFailureException {
-        getLog().info( String.format( WELCOM_MESSAGE, generatorName ) );
+        getLog().info( String.format( WELCOME_MESSAGE, generatorName ) );
         getLog().info("Looking for classes matching '" + entityPattern + "' pattern in " + sourceRoot );
         String[] classes = findClasses( sourceRoot, entityPattern );
 
@@ -193,11 +194,47 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
         return result;
     }
 
-    protected boolean isJpaRelationType(String annotationTypeName) {
-        return  annotationTypeName.equals(ManyToOne.class.getSimpleName())
-                || annotationTypeName.equals(ManyToMany.class.getSimpleName())
-                || annotationTypeName.equals(OneToMany.class.getSimpleName())
-                || annotationTypeName.equals(OneToOne.class.getSimpleName());
+    protected boolean isSyntheticField( JavaField field ) {
+        JavaClass fieldContext = field.getParentClass();
+
+        Annotation extendsAnnotation = null;
+        for ( Annotation annotation : fieldContext.getAnnotations() ) {
+            if ( !isA(annotation.getType().getJavaClass(),
+                    DTO_EXTENDS_ANNOTATION_CLASS_NAME) ) {
+                continue;
+            }
+
+            extendsAnnotation = annotation;
+            break;
+        }
+
+        if ( extendsAnnotation == null ) {
+            return false;
+        }
+
+        Object annotationValue = extendsAnnotation.getNamedParameter("value");
+        if ( annotationValue instanceof Annotation ) {
+            return normalizeAnnotationValue(
+                    (String) ((Annotation) annotationValue).getNamedParameter("value") )
+                    .equals( field.getName() );
+        } else if ( annotationValue instanceof List ) {
+            for ( Annotation annotation : (List<Annotation>) annotationValue ) {
+                if ( normalizeAnnotationValue(
+                        (String) annotation.getNamedParameter("value") )
+                        .equals( field.getName() ) ) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    protected boolean isJpaRelationType(JavaClass annotationTypeName) {
+        return  isA( annotationTypeName, ManyToOne.class.getSimpleName())
+                || isA(annotationTypeName, ManyToMany.class.getSimpleName())
+                || isA( annotationTypeName, OneToMany.class.getSimpleName())
+                || isA( annotationTypeName, OneToOne.class.getSimpleName());
     }
 
     protected boolean isSimpleType( JavaClass type ) {
@@ -229,6 +266,12 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
     }
 
     protected boolean isMethodExists( String methodName, String className ) {
+        return isMethodExists(methodName, className, true, true);
+    }
+
+    protected boolean isMethodExists( String methodName, String className,
+                                      final boolean deepSearch,
+                                      final boolean publicOnly ) {
         JavaClass javaClazz = classMetaBuilder.getClassByName(className);
         if ( javaClazz == null ) {
             throw new IllegalArgumentException("Class not found: "
@@ -236,13 +279,20 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
         }
 
         boolean result = false;
-        for ( JavaMethod method : javaClazz.getMethods() ) {
-            if ( !method.getName().equals( methodName ) ) {
-                continue;
+        JavaClass parentClass = javaClazz;
+        do {
+            for ( JavaMethod method : parentClass.getMethods() ) {
+                if ( !method.getName().equals( methodName )
+                        || ( publicOnly && !method.isPublic() ) ) {
+                    continue;
+                }
+
+                result = true;
+                break;
             }
 
-            result = true;
-        }
+            parentClass = parentClass.getSuperJavaClass();
+        } while ( deepSearch && !result && parentClass != null );
 
         return result;
     }
@@ -282,7 +332,7 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
     protected boolean hasAnnotation(AbstractBaseJavaEntity clazz, String className, boolean checkParent ) {
         boolean result = false;
         for ( Annotation annotation : clazz.getAnnotations() ) {
-            if ( !annotation.getType().getFullyQualifiedName().equals(className) ) {
+            if ( !isA( annotation.getType().getJavaClass(), className) ) {
                 continue;
             }
 
@@ -342,8 +392,7 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
         for ( JavaField field : entityClass.getFields() ) {
             boolean isId = false;
             for (Annotation annotation : field.getAnnotations()) {
-                if ( !annotation.getType().getFullyQualifiedName().equals(Id.class.getCanonicalName())
-                        && !annotation.getType().getFullyQualifiedName().equals( Id.class.getSimpleName() ) ) {
+                if ( !isA( annotation.getType().getJavaClass(), Id.class.getName() ) ) {
                     continue;
                 }
 
@@ -358,8 +407,7 @@ public abstract class AbstractGeneratorMojo extends AbstractMojo {
         }
 
         if ( result == null && entityClass.getSuperClass() != null
-                && !entityClass.getSuperJavaClass().getFullyQualifiedName().equals(
-                Object.class.getCanonicalName()) ) {
+                && !isA( entityClass.getSuperJavaClass(), Object.class.getSimpleName() ) ) {
             result = detectIdKeyType( entityClass.getSuperJavaClass() );
         }
 

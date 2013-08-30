@@ -17,7 +17,7 @@ import java.util.*;
 public class GenDaoMojo extends AbstractGeneratorMojo {
 
     public static final String JPA_REPOSITORY_CLASS_NAME
-            = "org.springframework.data.jpa.repository.JpaRepository";
+            =  "org.springframework.data.jpa.repository.JpaRepository";
 
     public static final String JPA_REPOSITORY_ANNOTATION_CLASS_NAME
             = "org.springframework.stereotype.Repository";
@@ -127,37 +127,42 @@ public class GenDaoMojo extends AbstractGeneratorMojo {
             querySpecList.addAll(processAnnotation(annotation));
         }
 
-        JClass _entityClazz = codeModel.ref( entityClazz.getFullyQualifiedName() );
         for ( QuerySpec spec : querySpecList ) {
-            generateQueryMethod( _entityClazz, daoClazz, spec, false, false);
+            generateQueryMethod( entityClazz, daoClazz, spec, false, false);
 
             if ( spec.isPageable ) {
-                generateQueryMethod(_entityClazz, daoClazz, spec, true, false);
+                generateQueryMethod(entityClazz, daoClazz, spec, true, false);
             }
 
             if ( spec.isSortable ) {
-                generateQueryMethod( _entityClazz, daoClazz, spec, true, false );
+                generateQueryMethod( entityClazz, daoClazz, spec, true, false );
             }
 
             if ( spec.isPageable && spec.isSortable ) {
-                generateQueryMethod( _entityClazz, daoClazz, spec, true, true );
+                generateQueryMethod( entityClazz, daoClazz, spec, true, true );
             }
         }
     }
 
-    protected void generateQueryMethod(JClass entityClazz, JDefinedClass daoClazz, QuerySpec spec,
+    protected void generateQueryMethod(JavaClass entityClazz, JDefinedClass daoClazz, QuerySpec spec,
                                        boolean appendPagerParam,
                                        boolean appendSortingParam ) {
-        JClass returnType = entityClazz;
+        JClass returnType;
+        if ( entityClazz.isAbstract() ) {
+            returnType = codeModel.ref( daoClazz.typeParams()[0].fullName() );
+        } else {
+            returnType = codeModel.ref( entityClazz.getFullyQualifiedName() );
+        }
+
         if ( appendPagerParam ) {
             returnType = codeModel.ref( PAGE_CLASS_NAME )
-                    .narrow( entityClazz );
+                    .narrow( returnType );
         } else {
             if ( spec.resultType != null ) {
                 returnType = codeModel.ref( spec.resultType );
             } else if ( spec.isCollection ) {
                 returnType = codeModel.ref(List.class.getCanonicalName())
-                        .narrow( entityClazz );
+                        .narrow( returnType );
             }
         }
 
